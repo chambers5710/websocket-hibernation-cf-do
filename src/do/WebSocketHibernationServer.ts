@@ -6,26 +6,27 @@ export class WebSocketHibernationServer extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sessions = new Map();
-
-    // Restore any WebSockets that survived hibernation
-    this.ctx.getWebSockets().forEach((ws) => {
-      const attachment = ws.deserializeAttachment();
-      if (attachment?.id) {
-        this.sessions.set(ws, { id: attachment.id });
-      } else {
-        ws.close();
-      }
-    });
-
-    // Respond to pings without waking up the DO
+    this._restoreHibernatedSessions();
     this.ctx.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair("ping", "pong")
     );
   }
 
+  private async _restoreHibernatedSessions() {
+    await Promise.all(
+      this.ctx.getWebSockets().map(async (ws) => {
+        const attachment = ws.deserializeAttachment();
+        if (!attachment?.id) {
+          ws.close();
+          return;
+        }
+      })
+    );
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") !== "websocket") {
-      return new Response("Expected WebSocket upgrade", { status: 402 });
+      return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
     const [client, server] = Object.values(new WebSocketPair());
@@ -51,7 +52,8 @@ export class WebSocketHibernationServer extends DurableObject<Env> {
     if (session) await this.onDisconnect(ws, session);
   }
 
-  protected async onConnect(ws: WebSocket, session: { id: string }): Promise<void>{}
+  // Lifecycle hooks — override in subclasses
+  protected async onConnect(ws: WebSocket, session: { id: string }): Promise<void> {}
   protected async onMessage(ws: WebSocket, session: { id: string }, message: string | ArrayBuffer): Promise<void> {}
   protected async onDisconnect(ws: WebSocket, session: { id: string }): Promise<void> {}
 
@@ -60,8 +62,8 @@ export class WebSocketHibernationServer extends DurableObject<Env> {
   }
 
   protected broadcast(type: string, data: Record<string, unknown> = {}, exclude?: WebSocket) {
-    this.sessions.forEach((session, ws) => {
+    this.sessions.forEach((_, ws) => {
       if (ws !== exclude) this.send(ws, type, data);
-    })
+    });
   }
 }
