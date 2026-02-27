@@ -13,16 +13,15 @@ export class WebSocketHibernationServer extends DurableObject<Env> {
   }
 
   private async _restoreHibernatedSessions() {
-    await Promise.all(
-      this.ctx.getWebSockets().map(async (ws) => {
-        const attachment = ws.deserializeAttachment();
-        if (!attachment?.id) {
-          ws.close();
-          return;
-        }
-      })
-    );
+  for (const ws of this.ctx.getWebSockets()) {
+    const attachment = ws.deserializeAttachment();
+    if (!attachment?.id) {
+      ws.close();
+      continue;
+    }
+    this.sessions.set(ws, { id: attachment.id }); // actually restore it
   }
+}
 
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") !== "websocket") {
