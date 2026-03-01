@@ -1,16 +1,22 @@
 # WebSocketHibernationServer
 
-A Cloudflare Workers framework for building real-time WebSocket-based games and applications. Built on Durable Objects with automatic session hibernation for cost-efficient server-side state management.
+A quickstart for building real-time WebSocket chat on Cloudflare Workers. This monorepo includes a Durable Object backend with automatic session hibernation and a minimal Vite + React frontend.
+
+## Included
+
+**Backend** — a `WebSocketHibernationServer` base class built on Durable Objects, plus a `Lobby` subclass that implements a persistent chat room with history.
+
+**Frontend** — a Vite + React app with a minimal chat interface that connects to the lobby over WebSocket.
 
 ## What is hibernation?
 
-Normally a Durable Object stays alive (and billed) for as long as any WebSocket connection is open. For a card game where players sit and think between moves, this means paying for idle compute.
+Normally a Durable Object stays alive (and billed) for as long as any WebSocket connection is open. For a chat room where users sit idle between messages, this means paying for idle compute.
 
 Hibernation solves this. The DO can be evicted from memory between messages and only wakes up when a WebSocket message actually arrives. Cloudflare preserves the open WebSocket connections themselves — the DO just isn't running in between.
 
-## How this class uses it
+## How this works
 
-**Accepting connections with `ctx.acceptWebSocket()`** instead of the standard `ws.accept()` is what opts you into hibernation. Cloudflare takes over management of the socket.
+**Accepting connections with `ctx.acceptWebSocket()`** instead of the standard `ws.accept()` opts into hibernation. Cloudflare takes over management of the socket.
 
 **`serializeAttachment({ id })`** staples a session ID onto each WebSocket object. Since in-memory state is wiped on hibernation, this is how we know who a socket belongs to when the DO wakes back up.
 
@@ -18,65 +24,19 @@ Hibernation solves this. The DO can be evicted from memory between messages and 
 
 **`ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"))`** responds to ping messages automatically without waking the DO at all. Keeps connections alive for free.
 
-## Lifecycle hooks for subclasses
+## Lifecycle hooks
 
 The base class handles all the boilerplate. Subclasses override three methods:
 
 ```ts
-// Called when a new player connects
 protected async onConnect(ws: WebSocket, session: Session): Promise<void>
-
-// Called when a player sends a message
 protected async onMessage(ws: WebSocket, session: Session, message: string | ArrayBuffer): Promise<void>
-
-// Called when a player disconnects
 protected async onDisconnect(ws: WebSocket, session: Session): Promise<void>
 ```
 
-## Example subclasses
+## The Lobby
 
-### Lobby
-
-A shared space where players connect, host games, or join existing ones:
-
-```ts
-export class Lobby extends WebSocketHibernationServer {
-  protected async onConnect(ws: WebSocket, session: { id: string; }) {
-    this.send(ws, "WELCOME", { sessionId: session.id });
-  }
-
-  protected async onMessage(ws: WebSocket, session: { id: string; }, message: string | ArrayBuffer) {
-    const { type } = JSON.parse(message as string);
-    if (type === "HOST_GAME") {
-      this.broadcast("GAME_HOSTED", { hostedBy: session.id }, ws);
-    }
-  }
-
-  protected async onDisconnect(ws: WebSocket, session: { id: string; }) {
-    this.broadcast("PLAYER_LEFT", { sessionId: session.id });
-  }
-}
-```
-
-### GameRoom with Storage
-
-A `GameRoom` subclass can persist player assignments and game state using Durable Object storage. See [GameRoom.ts](src/do/GameRoom.ts) for a full example that uses `GameRoomStorage` to maintain player roles and game state across hibernation cycles.
-
-## Routing to multiple Durable Objects
-
-Each Durable Object handles its own WebSocket connections independently. Use `idFromName()` to create or retrieve specific instances:
-
-```ts
-// Route to shared lobby
-const lobbyId = env.LOBBY.idFromName("lobby");
-const lobbyStub = env.LOBBY.get(lobbyId);
-
-// Route to per-room game instances
-const gameRoomId = env.GAME_ROOM.idFromName(roomId);
-const gameRoomStub = env.GAME_ROOM.get(gameRoomId);
-```
-
-This allows one shared Lobby instance talking to many isolated GameRoom instances.
+`Lobby.ts` extends `WebSocketHibernationServer` with a shared chat room. It persists up to 50 chat entries in Durable Object storage so new connections receive history on join. It broadcasts join/leave events and chat messages to all connected sessions.
 
 ## Helpers
 
@@ -84,43 +44,19 @@ This allows one shared Lobby instance talking to many isolated GameRoom instance
 
 `broadcast(type, data, exclude?)` — sends to all connected sockets, optionally skipping one (e.g. the sender).
 
-## Frontend integration with React
+## Frontend
 
-Use this hook to connect your React frontend to the WebSocket server:
+The React app (`App.tsx`) connects to the lobby WebSocket using the `useWebSocket` hook and renders a `Chat` component. The hook keeps a stable `onMessage` callback ref so message handlers never go stale, and it handles cleanup on unmount gracefully — waiting for the socket to open before closing it if needed.
 
-```tsx
-import { useEffect, useRef, useState } from "react";
+## Getting started (backend + frontend commands are the same)
 
-type MessageHandler = (data: Record<string, unknown>) => void;
+```bash
+# Install dependencies
+yarn
 
-export function useWebSocket(url: string, onMessage: MessageHandler) {
-  const wsRef = useRef<WebSocket | null>(null);
-  const onMessageRef = useRef(onMessage);
-  onMessageRef.current = onMessage;
+# Run locally
+yarn dev
 
-  const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">("disconnected");
-
-  useEffect(() => {
-    if (!url) return;
-
-    setStatus("connecting");
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
-
-    ws.onopen = () => setStatus("connected");
-    ws.onmessage = (e) => onMessageRef.current(JSON.parse(e.data));
-    ws.onclose = () => setStatus("disconnected");
-    ws.onerror = () => setStatus("disconnected");
-
-    return () => ws.close();
-  }, [url]);
-
-  function send(type: string, data: Record<string, unknown> = {}) {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type, ...data }));
-    }
-  }
-
-  return { send, status };
-}
+# Deploy to Cloudflare
+yarn deploy
 ```
