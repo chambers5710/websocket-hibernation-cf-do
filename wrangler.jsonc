@@ -10,7 +10,7 @@
 	"migrations": [
 		{
 			"new_sqlite_classes": [
-				"Lobby", "GameRoom"
+				"Lobby"
 			],
 			"tag": "v1"
 		}
@@ -20,11 +20,7 @@
 			{
 				"class_name": "Lobby",
 				"name": "LOBBY"
-			}, 
-			{
-				"class_name": "GameRoom",
-				"name": "GAME_ROOM"
-			}
+			},
 		]
 	},
 	"observability": {
